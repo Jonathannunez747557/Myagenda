@@ -1,6 +1,11 @@
 spring:
   application:
     name: identity-service
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          secret-key: clave-super-secreta-12345678901234567890
 
 server:
   port: 8081
