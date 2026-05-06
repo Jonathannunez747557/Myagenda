@@ -12,6 +12,27 @@ spring:
           filters:
             - StripPrefix=1
 
+        - id: core-route
+          uri: http://localhost:8082
+          predicates:
+            - Path=/core/**
+          filters:
+            - StripPrefix=1
+
+        - id: payments-route
+          uri: http://localhost:8083
+          predicates:
+            - Path=/payments/**
+          filters:
+            - StripPrefix=1
+
+        - id: notifications-route
+          uri: http://localhost:8084
+          predicates:
+            - Path=/notifications/**
+          filters:
+            - StripPrefix=1
+
 server:
   port: 8080
 
