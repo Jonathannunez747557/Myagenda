@@ -2,13 +2,13 @@ spring:
   application:
     name: myagenda-core-service
   datasource:
-    url: jdbc:postgresql://localhost:5432/core_db
+    url: jdbc:postgresql://localhost:5433/core_db
     username: myagenda
     password: myagenda
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
-      ddl-auto: validate
+      ddl-auto: update
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
