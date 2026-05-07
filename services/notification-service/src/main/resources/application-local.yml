@@ -1,0 +1,9 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5435/notification_db
+    username: myagenda
+    password: myagenda
+
+  jpa:
+    hibernate:
+      ddl-auto: update
