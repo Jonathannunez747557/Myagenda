@@ -309,7 +309,8 @@ test_core_service() {
         -X GET "${BASE_URL}:${CORE_PORT}/availability"
 
     execute_curl "GET /availability/$avail_id - Obtener por ID" \
-        -X GET "${BASE_URL}:${CORE_PORT}/availability/$avail_id"
+        -X GET "${BASE_URL}:${CORE_PORT}/availability/$avail_id" \
+        -H "Authorization: Bearer $AUTH_TOKEN"
 
     local booking_resp
     booking_resp=$(curl -s -X POST "${BASE_URL}:${CORE_PORT}/bookings/hold" \
