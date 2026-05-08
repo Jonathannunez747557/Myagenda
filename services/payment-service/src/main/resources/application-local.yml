@@ -1,12 +1,9 @@
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/identity_db
+    url: jdbc:postgresql://localhost:5434/payment_db
     username: myagenda
     password: myagenda
 
   jpa:
     hibernate:
       ddl-auto: update
-
-  flyway:
-    enabled: false

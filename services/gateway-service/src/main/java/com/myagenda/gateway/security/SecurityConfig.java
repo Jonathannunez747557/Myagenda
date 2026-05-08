@@ -34,7 +34,11 @@ public class SecurityConfig {
                         .pathMatchers(
                                 "/actuator/**",
                                 "/identity/actuator/**",
-                                "/identity/auth/**"
+                                "/identity/auth/**",
+                                "/core/availability",
+                                "/core/actuator/**",
+                                "/payments/actuator/**",
+                                "/notifications/actuator/**"
                         ).permitAll()
                         .pathMatchers("/identity/admin/**").hasRole("ADMIN")
                         .anyExchange().authenticated()

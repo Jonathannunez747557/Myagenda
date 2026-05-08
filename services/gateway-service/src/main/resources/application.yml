@@ -1,16 +1,18 @@
 spring:
+  profiles:
+    active: local
   application:
     name: gateway-service
 
   cloud:
     gateway:
       routes:
-        - id: identity-route
-          uri: http://localhost:8081
-          predicates:
-            - Path=/identity/**
-          filters:
-            - StripPrefix=1
+        #- id: identity-route
+        #  uri: http://localhost:8081
+        #  predicates:
+        #    - Path=/identity/**
+        #  filters:
+        #    - StripPrefix=1
 
         - id: core-route
           uri: http://localhost:8082
