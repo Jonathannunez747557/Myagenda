@@ -21,6 +21,8 @@ AUTH_TOKEN=""
 FAILED_TESTS=()
 SELECTED_SERVICE=""
 PIDS_TO_KILL=()
+RUNNING_ALL=false
+IDENTITY_STARTED=false
 
 print_header() {
     echo -e "\n${BLUE}========================================${NC}"
@@ -246,6 +248,25 @@ cleanup() {
         fi
     done
 
+    echo -e "${CYAN}  Esperando a que se liberen los puertos...${NC}"
+    for port in 8080 8081 8082 8083 8084; do
+        local count=0
+        while netstat -ano 2>/dev/null | grep -q ":${port}.*LISTENING"; do
+            if [ $count -eq 0 ]; then
+                echo -e "${YELLOW}    Puerto $port aún en uso, esperando...${NC}"
+            fi
+            sleep 1
+            count=$((count + 1))
+            if [ $count -gt 30 ]; then
+                echo -e "${YELLOW}    ⚠️  Puerto $port no se liberó en 30s${NC}"
+                break
+            fi
+        done
+        if [ $count -gt 0 ] && [ $count -le 30 ]; then
+            echo -e "${GREEN}    ✅ Puerto $port liberado${NC}"
+        fi
+    done
+
     echo -e "${CYAN}  Bajando contenedores y volúmenes...${NC}"
     docker-compose -f "$DOCKER_COMPOSE_FILE" down -v 2>/dev/null || true
     echo -e "${GREEN}✅ Limpieza completada${NC}"
@@ -255,20 +276,40 @@ cleanup() {
 # TEST FUNCTIONS
 # ==========================================
 
-test_identity_service() {
-    print_header "🔐 IDENTITY SERVICE"
+setup_identity_once() {
+    if [ "$IDENTITY_STARTED" = true ]; then
+        return
+    fi
+    
     restart_db "identity-db"
     start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
     wait_for_microservices "identity-service|$IDENTITY_PORT"
-
     create_test_user
+    get_auth_token
+    
+    IDENTITY_STARTED=true
+}
+
+test_identity_service() {
+    print_header "🔐 IDENTITY SERVICE"
+    
+    if [ "$RUNNING_ALL" = true ]; then
+        setup_identity_once
+    else
+        restart_db "identity-db"
+        start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
+        wait_for_microservices "identity-service|$IDENTITY_PORT"
+        create_test_user
+    fi
 
     execute_curl "POST /users - Crear usuario ADMIN" \
         -X POST "${BASE_URL}:${IDENTITY_PORT}/users" \
         -H "Content-Type: application/json" \
         -d '{"username":"testuser2","password":"Test1234!","roles":["ADMIN"]}'
 
-    get_auth_token
+    if [ "$RUNNING_ALL" = false ]; then
+        get_auth_token
+    fi
 
     execute_curl "GET /admin/test - Admin test" \
         -X GET "${BASE_URL}:${IDENTITY_PORT}/admin/test" \
@@ -282,14 +323,21 @@ test_identity_service() {
 
 test_core_service() {
     print_header "📅 CORE SERVICE"
-    restart_db "identity-db"
-    restart_db "core-db"
-    start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
-    start_microservice "core-service" $CORE_PORT "$PROJECT_ROOT/services/myagenda-core-service"
-    wait_for_microservices "identity-service|$IDENTITY_PORT" "core-service|$CORE_PORT"
-
-    create_test_user
-    get_auth_token
+    
+    if [ "$RUNNING_ALL" = true ]; then
+        setup_identity_once
+        restart_db "core-db"
+        start_microservice "core-service" $CORE_PORT "$PROJECT_ROOT/services/myagenda-core-service"
+        wait_for_microservices "core-service|$CORE_PORT"
+    else
+        restart_db "identity-db"
+        restart_db "core-db"
+        start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
+        start_microservice "core-service" $CORE_PORT "$PROJECT_ROOT/services/myagenda-core-service"
+        wait_for_microservices "identity-service|$IDENTITY_PORT" "core-service|$CORE_PORT"
+        create_test_user
+        get_auth_token
+    fi
 
     local avail_resp
     avail_resp=$(curl -s -X POST "${BASE_URL}:${CORE_PORT}/availability" \
@@ -346,14 +394,21 @@ test_core_service() {
 
 test_payment_service() {
     print_header "💳 PAYMENT SERVICE"
-    restart_db "identity-db"
-    restart_db "payment-db"
-    start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
-    start_microservice "payment-service" $PAYMENT_PORT "$PROJECT_ROOT/services/payment-service"
-    wait_for_microservices "identity-service|$IDENTITY_PORT" "payment-service|$PAYMENT_PORT"
-
-    create_test_user
-    get_auth_token
+    
+    if [ "$RUNNING_ALL" = true ]; then
+        setup_identity_once
+        restart_db "payment-db"
+        start_microservice "payment-service" $PAYMENT_PORT "$PROJECT_ROOT/services/payment-service"
+        wait_for_microservices "payment-service|$PAYMENT_PORT"
+    else
+        restart_db "identity-db"
+        restart_db "payment-db"
+        start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
+        start_microservice "payment-service" $PAYMENT_PORT "$PROJECT_ROOT/services/payment-service"
+        wait_for_microservices "identity-service|$IDENTITY_PORT" "payment-service|$PAYMENT_PORT"
+        create_test_user
+        get_auth_token
+    fi
 
     local payment_resp
     payment_resp=$(curl -s -X POST "${BASE_URL}:${PAYMENT_PORT}/payments/process" \
@@ -381,14 +436,21 @@ test_payment_service() {
 
 test_notification_service() {
     print_header "🔔 NOTIFICATION SERVICE"
-    restart_db "identity-db"
-    restart_db "notification-db"
-    start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
-    start_microservice "notification-service" $NOTIFICATION_PORT "$PROJECT_ROOT/services/notification-service"
-    wait_for_microservices "identity-service|$IDENTITY_PORT" "notification-service|$NOTIFICATION_PORT"
-
-    create_test_user
-    get_auth_token
+    
+    if [ "$RUNNING_ALL" = true ]; then
+        setup_identity_once
+        restart_db "notification-db"
+        start_microservice "notification-service" $NOTIFICATION_PORT "$PROJECT_ROOT/services/notification-service"
+        wait_for_microservices "notification-service|$NOTIFICATION_PORT"
+    else
+        restart_db "identity-db"
+        restart_db "notification-db"
+        start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
+        start_microservice "notification-service" $NOTIFICATION_PORT "$PROJECT_ROOT/services/notification-service"
+        wait_for_microservices "identity-service|$IDENTITY_PORT" "notification-service|$NOTIFICATION_PORT"
+        create_test_user
+        get_auth_token
+    fi
 
     local notif_resp
     notif_resp=$(curl -s -X POST "${BASE_URL}:${NOTIFICATION_PORT}/notifications/send" \
@@ -466,6 +528,11 @@ main() {
     check_prerequisites || { echo -e "${RED}❌ Requisitos no cumplidos${NC}"; exit 1; }
     show_menu
     print_header "Iniciando pruebas"
+    
+    if [ "$SELECTED_SERVICE" = "all" ]; then
+        RUNNING_ALL=true
+    fi
+    
     case $SELECTED_SERVICE in
         gateway)      test_gateway_service ;;
         identity)     test_identity_service ;;
