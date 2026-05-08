@@ -23,6 +23,11 @@ SELECTED_SERVICE=""
 PIDS_TO_KILL=()
 RUNNING_ALL=false
 IDENTITY_STARTED=false
+PARALLEL_STARTUP=false
+PORTS_TO_KILL=($GATEWAY_PORT $IDENTITY_PORT $CORE_PORT $PAYMENT_PORT $NOTIFICATION_PORT)
+SERVICES_TO_TEST=()
+SERVICES_STARTED=()
+DBS_TO_RESTART=()
 
 print_header() {
     echo -e "\n${BLUE}========================================${NC}"
@@ -242,27 +247,21 @@ cleanup() {
     echo -e "\n${CYAN}🧹 Limpiando procesos y contenedores...${NC}"
 
     for pid in "${PIDS_TO_KILL[@]}"; do
-        if kill -0 "$pid" 2>/dev/null; then
-            echo -e "${YELLOW}  Matando proceso $pid...${NC}"
-            kill -9 "$pid" 2>/dev/null || true
-        fi
+        echo -e "${YELLOW}  Matando proceso $pid...${NC}"
+        taskkill //PID "$pid" //F 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
     done
 
-    echo -e "${CYAN}  Esperando a que se liberen los puertos...${NC}"
-    for port in 8080 8081 8082 8083 8084; do
-        local count=0
-        while netstat -ano 2>/dev/null | grep -q ":${port}.*LISTENING"; do
-            if [ $count -eq 0 ]; then
-                echo -e "${YELLOW}    Puerto $port aún en uso, esperando...${NC}"
-            fi
+    echo -e "${CYAN}  Liberando puertos...${NC}"
+    for port in "${PORTS_TO_KILL[@]}"; do
+        local pids_in_port
+        pids_in_port=$(netstat -ano 2>/dev/null | grep ":${port}.*LISTENING" | awk '{print $5}' | sort -u)
+        
+        if [ -n "$pids_in_port" ]; then
+            echo -e "${YELLOW}    Puerto $port: matando procesos...${NC}"
+            for p in $pids_in_port; do
+                taskkill //PID "$p" //F 2>/dev/null || true
+            done
             sleep 1
-            count=$((count + 1))
-            if [ $count -gt 30 ]; then
-                echo -e "${YELLOW}    ⚠️  Puerto $port no se liberó en 30s${NC}"
-                break
-            fi
-        done
-        if [ $count -gt 0 ] && [ $count -le 30 ]; then
             echo -e "${GREEN}    ✅ Puerto $port liberado${NC}"
         fi
     done
@@ -290,26 +289,69 @@ setup_identity_once() {
     IDENTITY_STARTED=true
 }
 
+startup_all_services() {
+    local services_str=""
+    local wait_str=""
+    
+    for service in "${SERVICES_TO_TEST[@]}"; do
+        case $service in
+            gateway)
+                if [ "$IDENTITY_STARTED" = false ]; then
+                    setup_identity_once
+                fi
+                start_microservice "gateway-service" $GATEWAY_PORT "$PROJECT_ROOT/services/gateway-service"
+                services_str="${services_str}gateway-service|$GATEWAY_PORT "
+                ;;
+            identity)
+                setup_identity_once
+                ;;
+            core)
+                if [ "$IDENTITY_STARTED" = false ]; then
+                    setup_identity_once
+                fi
+                restart_db "core-db"
+                start_microservice "core-service" $CORE_PORT "$PROJECT_ROOT/services/myagenda-core-service"
+                services_str="${services_str}core-service|$CORE_PORT "
+                ;;
+            payment)
+                if [ "$IDENTITY_STARTED" = false ]; then
+                    setup_identity_once
+                fi
+                restart_db "payment-db"
+                start_microservice "payment-service" $PAYMENT_PORT "$PROJECT_ROOT/services/payment-service"
+                services_str="${services_str}payment-service|$PAYMENT_PORT "
+                ;;
+            notification)
+                if [ "$IDENTITY_STARTED" = false ]; then
+                    setup_identity_once
+                fi
+                restart_db "notification-db"
+                start_microservice "notification-service" $NOTIFICATION_PORT "$PROJECT_ROOT/services/notification-service"
+                services_str="${services_str}notification-service|$NOTIFICATION_PORT "
+                ;;
+        esac
+    done
+    
+    if [ -n "$services_str" ]; then
+        wait_for_microservices $services_str
+    fi
+}
+
 test_identity_service() {
     print_header "🔐 IDENTITY SERVICE"
     
-    if [ "$RUNNING_ALL" = true ]; then
-        setup_identity_once
-    else
+    if [ "$PARALLEL_STARTUP" = false ]; then
         restart_db "identity-db"
         start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
         wait_for_microservices "identity-service|$IDENTITY_PORT"
         create_test_user
+        get_auth_token
     fi
 
     execute_curl "POST /users - Crear usuario ADMIN" \
         -X POST "${BASE_URL}:${IDENTITY_PORT}/users" \
         -H "Content-Type: application/json" \
         -d '{"username":"testuser2","password":"Test1234!","roles":["ADMIN"]}'
-
-    if [ "$RUNNING_ALL" = false ]; then
-        get_auth_token
-    fi
 
     execute_curl "GET /admin/test - Admin test" \
         -X GET "${BASE_URL}:${IDENTITY_PORT}/admin/test" \
@@ -324,12 +366,7 @@ test_identity_service() {
 test_core_service() {
     print_header "📅 CORE SERVICE"
     
-    if [ "$RUNNING_ALL" = true ]; then
-        setup_identity_once
-        restart_db "core-db"
-        start_microservice "core-service" $CORE_PORT "$PROJECT_ROOT/services/myagenda-core-service"
-        wait_for_microservices "core-service|$CORE_PORT"
-    else
+    if [ "$PARALLEL_STARTUP" = false ]; then
         restart_db "identity-db"
         restart_db "core-db"
         start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
@@ -395,12 +432,7 @@ test_core_service() {
 test_payment_service() {
     print_header "💳 PAYMENT SERVICE"
     
-    if [ "$RUNNING_ALL" = true ]; then
-        setup_identity_once
-        restart_db "payment-db"
-        start_microservice "payment-service" $PAYMENT_PORT "$PROJECT_ROOT/services/payment-service"
-        wait_for_microservices "payment-service|$PAYMENT_PORT"
-    else
+    if [ "$PARALLEL_STARTUP" = false ]; then
         restart_db "identity-db"
         restart_db "payment-db"
         start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
@@ -437,12 +469,7 @@ test_payment_service() {
 test_notification_service() {
     print_header "🔔 NOTIFICATION SERVICE"
     
-    if [ "$RUNNING_ALL" = true ]; then
-        setup_identity_once
-        restart_db "notification-db"
-        start_microservice "notification-service" $NOTIFICATION_PORT "$PROJECT_ROOT/services/notification-service"
-        wait_for_microservices "notification-service|$NOTIFICATION_PORT"
-    else
+    if [ "$PARALLEL_STARTUP" = false ]; then
         restart_db "identity-db"
         restart_db "notification-db"
         start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
@@ -482,13 +509,15 @@ test_notification_service() {
 
 test_gateway_service() {
     print_header "🌐 GATEWAY SERVICE"
-    restart_db "identity-db"
-    start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
-    start_microservice "gateway-service" $GATEWAY_PORT "$PROJECT_ROOT/services/gateway-service"
-    wait_for_microservices "identity-service|$IDENTITY_PORT" "gateway-service|$GATEWAY_PORT"
-
-    create_test_user
-    get_auth_token
+    
+    if [ "$PARALLEL_STARTUP" = false ]; then
+        restart_db "identity-db"
+        start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
+        start_microservice "gateway-service" $GATEWAY_PORT "$PROJECT_ROOT/services/gateway-service"
+        wait_for_microservices "identity-service|$IDENTITY_PORT" "gateway-service|$GATEWAY_PORT"
+        create_test_user
+        get_auth_token
+    fi
 
     execute_curl "GET /actuator/health" \
         -X GET "${BASE_URL}:${GATEWAY_PORT}/actuator/health"
@@ -501,7 +530,8 @@ show_menu() {
     echo "╔════════════════════════════════════════════════════════════════╗"
     echo "║       MyAgenda Microservices Endpoints Test Script             ║"
     echo "║                                                                ║"
-    echo "║  ¿Qué microservicio quieres testear?                          ║"
+    echo "║  ¿Qué microservicios quieres testear?                         ║"
+    echo "║  (Ingresa números separados por espacios, ej: 2 3 4)          ║"
     echo "╚════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo "  1) Gateway Service"
@@ -512,15 +542,22 @@ show_menu() {
     echo "  6) Todos"
     echo ""
     read -rp "Selecciona: " choice
-    case $choice in
-        1) SELECTED_SERVICE="gateway" ;;
-        2) SELECTED_SERVICE="identity" ;;
-        3) SELECTED_SERVICE="core" ;;
-        4) SELECTED_SERVICE="payment" ;;
-        5) SELECTED_SERVICE="notification" ;;
-        6) SELECTED_SERVICE="all" ;;
-        *) echo "Opción inválida"; exit 1 ;;
-    esac
+    
+    if [ "$choice" = "6" ]; then
+        SERVICES_TO_TEST=(gateway identity core payment notification)
+        RUNNING_ALL=true
+    else
+        for num in $choice; do
+            case $num in
+                1) SERVICES_TO_TEST+=(gateway) ;;
+                2) SERVICES_TO_TEST+=(identity) ;;
+                3) SERVICES_TO_TEST+=(core) ;;
+                4) SERVICES_TO_TEST+=(payment) ;;
+                5) SERVICES_TO_TEST+=(notification) ;;
+                *) echo "Opción inválida: $num"; exit 1 ;;
+            esac
+        done
+    fi
 }
 
 main() {
@@ -529,24 +566,21 @@ main() {
     show_menu
     print_header "Iniciando pruebas"
     
-    if [ "$SELECTED_SERVICE" = "all" ]; then
-        RUNNING_ALL=true
+    if [ ${#SERVICES_TO_TEST[@]} -gt 1 ]; then
+        PARALLEL_STARTUP=true
+        startup_all_services
     fi
     
-    case $SELECTED_SERVICE in
-        gateway)      test_gateway_service ;;
-        identity)     test_identity_service ;;
-        core)         test_core_service ;;
-        payment)      test_payment_service ;;
-        notification) test_notification_service ;;
-        all)
-            test_gateway_service
-            test_identity_service
-            test_core_service
-            test_payment_service
-            test_notification_service
-            ;;
-    esac
+    for service in "${SERVICES_TO_TEST[@]}"; do
+        case $service in
+            gateway)      test_gateway_service ;;
+            identity)     test_identity_service ;;
+            core)         test_core_service ;;
+            payment)      test_payment_service ;;
+            notification) test_notification_service ;;
+        esac
+    done
+    
     echo -e "\n${GREEN}📄 Log completo guardado en: $RESULTS_FILE${NC}\n"
     
     echo -e "\n${CYAN}Presioná Enter para limpiar y cerrar...${NC}"
