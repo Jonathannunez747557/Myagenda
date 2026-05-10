@@ -1,9 +1,0 @@
-spring:
-  datasource:
-    url: jdbc:postgresql://localhost:5433/core_db
-    username: myagenda
-    password: myagenda
-
-  jpa:
-    hibernate:
-      ddl-auto: update

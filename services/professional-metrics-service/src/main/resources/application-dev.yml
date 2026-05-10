@@ -1,0 +1,5 @@
+spring:
+  data:
+    mongodb:
+      uri: mongodb://myagenda:myagenda@mongodb:27017/metrics_db?authSource=admin
+      auto-index-creation: true
