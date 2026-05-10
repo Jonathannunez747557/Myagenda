@@ -1,0 +1,9 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://availability-db:5432/availability_db
+    username: myagenda
+    password: myagenda
+
+  jpa:
+    hibernate:
+      ddl-auto: update

@@ -10,9 +10,13 @@ NC='\033[0m'
 BASE_URL="http://localhost"
 GATEWAY_PORT=8080
 IDENTITY_PORT=8081
-CORE_PORT=8082
+AVAILABILITY_PORT=8082
+BOOKING_PORT=8085
 PAYMENT_PORT=8083
 NOTIFICATION_PORT=8084
+WALLETS_PORT=8086
+METRICS_PORT=8087
+DASHBOARD_PORT=8088
 RESULTS_FILE="endpoints_results.log"
 DOCKER_COMPOSE_FILE="$(dirname "$0")/infra/docker/docker-compose-local.yml"
 PROJECT_ROOT="$(dirname "$0")"
@@ -24,10 +28,22 @@ PIDS_TO_KILL=()
 RUNNING_ALL=false
 IDENTITY_STARTED=false
 PARALLEL_STARTUP=false
-PORTS_TO_KILL=($GATEWAY_PORT $IDENTITY_PORT $CORE_PORT $PAYMENT_PORT $NOTIFICATION_PORT)
+PORTS_TO_KILL=($GATEWAY_PORT $IDENTITY_PORT $AVAILABILITY_PORT $BOOKING_PORT $PAYMENT_PORT $NOTIFICATION_PORT $WALLETS_PORT $METRICS_PORT $DASHBOARD_PORT)
 SERVICES_TO_TEST=()
 SERVICES_STARTED=()
 DBS_TO_RESTART=()
+
+declare -A SERVICE_DEPENDENCIES=(
+    [gateway]="identity"
+    [identity]=""
+    [availability]="identity"
+    [booking]="identity availability"
+    [payment]="identity booking"
+    [notification]="identity"
+    [external-wallets]="identity"
+    [professional-metrics]="identity booking"
+    [professional-dashboard]="professional-metrics"
+)
 
 print_header() {
     echo -e "\n${BLUE}========================================${NC}"
@@ -148,6 +164,36 @@ print_summary() {
         } >> "$RESULTS_FILE"
     fi
     FAILED_TESTS=()
+}
+
+resolve_dependencies() {
+    local service="$1"
+    local -a resolved=()
+    local -a to_process=("$service")
+    local -a processed=()
+    
+    while [ ${#to_process[@]} -gt 0 ]; do
+        local current="${to_process[0]}"
+        to_process=("${to_process[@]:1}")
+        
+        if [[ " ${processed[@]} " =~ " ${current} " ]]; then
+            continue
+        fi
+        processed+=("$current")
+        
+        local deps="${SERVICE_DEPENDENCIES[$current]}"
+        if [ -n "$deps" ]; then
+            for dep in $deps; do
+                if ! [[ " ${processed[@]} " =~ " ${dep} " ]]; then
+                    to_process+=("$dep")
+                fi
+            done
+        fi
+        
+        resolved+=("$current")
+    done
+    
+    echo "${resolved[@]}"
 }
 
 ensure_identity_running() {
@@ -305,13 +351,21 @@ startup_all_services() {
             identity)
                 setup_identity_once
                 ;;
-            core)
+            availability)
                 if [ "$IDENTITY_STARTED" = false ]; then
                     setup_identity_once
                 fi
-                restart_db "core-db"
-                start_microservice "core-service" $CORE_PORT "$PROJECT_ROOT/services/myagenda-core-service"
-                services_str="${services_str}core-service|$CORE_PORT "
+                restart_db "availability-db"
+                start_microservice "availability-service" $AVAILABILITY_PORT "$PROJECT_ROOT/services/availability-service"
+                services_str="${services_str}availability-service|$AVAILABILITY_PORT "
+                ;;
+            booking)
+                if [ "$IDENTITY_STARTED" = false ]; then
+                    setup_identity_once
+                fi
+                restart_db "booking-db"
+                start_microservice "booking-service" $BOOKING_PORT "$PROJECT_ROOT/services/booking-service"
+                services_str="${services_str}booking-service|$BOOKING_PORT "
                 ;;
             payment)
                 if [ "$IDENTITY_STARTED" = false ]; then
@@ -328,6 +382,26 @@ startup_all_services() {
                 restart_db "notification-db"
                 start_microservice "notification-service" $NOTIFICATION_PORT "$PROJECT_ROOT/services/notification-service"
                 services_str="${services_str}notification-service|$NOTIFICATION_PORT "
+                ;;
+            external-wallets)
+                if [ "$IDENTITY_STARTED" = false ]; then
+                    setup_identity_once
+                fi
+                restart_db "wallets-db"
+                start_microservice "external-wallets-service" $WALLETS_PORT "$PROJECT_ROOT/services/external-wallets-service"
+                services_str="${services_str}external-wallets-service|$WALLETS_PORT "
+                ;;
+            professional-metrics)
+                if [ "$IDENTITY_STARTED" = false ]; then
+                    setup_identity_once
+                fi
+                restart_db "mongodb"
+                start_microservice "professional-metrics-service" $METRICS_PORT "$PROJECT_ROOT/services/professional-metrics-service"
+                services_str="${services_str}professional-metrics-service|$METRICS_PORT "
+                ;;
+            professional-dashboard)
+                start_microservice "professional-dashboard-service" $DASHBOARD_PORT "$PROJECT_ROOT/services/professional-dashboard-service"
+                services_str="${services_str}professional-dashboard-service|$DASHBOARD_PORT "
                 ;;
         esac
     done
@@ -363,70 +437,122 @@ test_identity_service() {
     print_summary "IDENTITY SERVICE"
 }
 
-test_core_service() {
-    print_header "📅 CORE SERVICE"
+test_availability_service() {
+    print_header "📅 AVAILABILITY SERVICE"
     
     if [ "$PARALLEL_STARTUP" = false ]; then
         restart_db "identity-db"
-        restart_db "core-db"
+        restart_db "availability-db"
         start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
-        start_microservice "core-service" $CORE_PORT "$PROJECT_ROOT/services/myagenda-core-service"
-        wait_for_microservices "identity-service|$IDENTITY_PORT" "core-service|$CORE_PORT"
+        start_microservice "availability-service" $AVAILABILITY_PORT "$PROJECT_ROOT/services/availability-service"
+        wait_for_microservices "identity-service|$IDENTITY_PORT" "availability-service|$AVAILABILITY_PORT"
         create_test_user
         get_auth_token
     fi
 
-    local avail_resp
-    avail_resp=$(curl -s -X POST "${BASE_URL}:${CORE_PORT}/availability" \
+    execute_curl "POST /availability - Publicar horario del profesional" \
+        -X POST "${BASE_URL}:${AVAILABILITY_PORT}/availability" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $AUTH_TOKEN" \
-        -d '{"startTime":"2026-06-01T10:00:00","endTime":"2026-06-01T11:00:00","capacity":5}')
-    local avail_id
-    avail_id=$(echo "$avail_resp" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+        -d '{"date":"2026-06-01","startTime":"09:00:00","endTime":"18:00:00","slotDurationMinutes":30}'
 
-    execute_curl "POST /availability - Crear disponibilidad" \
-        -X POST "${BASE_URL}:${CORE_PORT}/availability" \
+    execute_curl "GET /actuator/health" \
+        -X GET "${BASE_URL}:${AVAILABILITY_PORT}/actuator/health"
+
+    print_summary "AVAILABILITY SERVICE"
+}
+
+test_booking_service() {
+    print_header "📋 BOOKING SERVICE"
+    
+    if [ "$PARALLEL_STARTUP" = false ]; then
+        restart_db "identity-db"
+        restart_db "booking-db"
+        start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
+        start_microservice "booking-service" $BOOKING_PORT "$PROJECT_ROOT/services/booking-service"
+        wait_for_microservices "identity-service|$IDENTITY_PORT" "booking-service|$BOOKING_PORT"
+        create_test_user
+        get_auth_token
+    fi
+
+    execute_curl "POST /bookings - Reservar turno" \
+        -X POST "${BASE_URL}:${BOOKING_PORT}/bookings" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $AUTH_TOKEN" \
-        -d '{"startTime":"2026-06-01T10:00:00","endTime":"2026-06-01T11:00:00","capacity":5}'
+        -d '{"availabilityId":"test-avail-001","slotStart":"2026-06-01T09:30:00","slotEnd":"2026-06-01T10:00:00"}'
 
-    execute_curl "GET /availability - Listar disponibilidades" \
-        -X GET "${BASE_URL}:${CORE_PORT}/availability"
+    execute_curl "GET /actuator/health" \
+        -X GET "${BASE_URL}:${BOOKING_PORT}/actuator/health"
 
-    execute_curl "GET /availability/$avail_id - Obtener por ID" \
-        -X GET "${BASE_URL}:${CORE_PORT}/availability/$avail_id" \
-        -H "Authorization: Bearer $AUTH_TOKEN"
+    print_summary "BOOKING SERVICE"
+}
 
-    local booking_resp
-    booking_resp=$(curl -s -X POST "${BASE_URL}:${CORE_PORT}/bookings/hold" \
+test_external_wallets_service() {
+    print_header "💳 EXTERNAL WALLETS SERVICE"
+    
+    if [ "$PARALLEL_STARTUP" = false ]; then
+        restart_db "identity-db"
+        restart_db "wallets-db"
+        start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
+        start_microservice "external-wallets-service" $WALLETS_PORT "$PROJECT_ROOT/services/external-wallets-service"
+        wait_for_microservices "identity-service|$IDENTITY_PORT" "external-wallets-service|$WALLETS_PORT"
+        create_test_user
+        get_auth_token
+    fi
+
+    execute_curl "POST /wallets - Crear wallet" \
+        -X POST "${BASE_URL}:${WALLETS_PORT}/wallets" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $AUTH_TOKEN" \
-        -d "{\"availabilityId\":\"$avail_id\"}")
-    local booking_id
-    booking_id=$(echo "$booking_resp" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+        -d '{"userFullName":"Juan Perez","userEmail":"juan@example.com","userDocument":"12345678","provider":"MERCADOPAGO","apiKey":"test-key","secretKey":"test-secret"}'
 
-    execute_curl "POST /bookings/hold - Crear reserva" \
-        -X POST "${BASE_URL}:${CORE_PORT}/bookings/hold" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $AUTH_TOKEN" \
-        -d "{\"availabilityId\":\"$avail_id\"}"
+    execute_curl "GET /actuator/health" \
+        -X GET "${BASE_URL}:${WALLETS_PORT}/actuator/health"
 
-    execute_curl "POST /bookings/$booking_id/confirm - Confirmar reserva" \
-        -X POST "${BASE_URL}:${CORE_PORT}/bookings/$booking_id/confirm" \
-        -H "Authorization: Bearer $AUTH_TOKEN"
+    print_summary "EXTERNAL WALLETS SERVICE"
+}
 
-    execute_curl "GET /bookings - Listar reservas del usuario" \
-        -X GET "${BASE_URL}:${CORE_PORT}/bookings" \
-        -H "Authorization: Bearer $AUTH_TOKEN"
+test_professional_metrics_service() {
+    print_header "📊 PROFESSIONAL METRICS SERVICE"
+    
+    if [ "$PARALLEL_STARTUP" = false ]; then
+        restart_db "identity-db"
+        restart_db "metrics-db"
+        start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
+        start_microservice "professional-metrics-service" $METRICS_PORT "$PROJECT_ROOT/services/professional-metrics-service"
+        wait_for_microservices "identity-service|$IDENTITY_PORT" "professional-metrics-service|$METRICS_PORT"
+        create_test_user
+        get_auth_token
+    fi
 
-    execute_curl "GET /bookings/$booking_id - Obtener reserva por ID" \
-        -X GET "${BASE_URL}:${CORE_PORT}/bookings/$booking_id" \
+    execute_curl "GET /metrics/{professionalId} - Obtener métricas" \
+        -X GET "${BASE_URL}:${METRICS_PORT}/metrics/prof-123" \
         -H "Authorization: Bearer $AUTH_TOKEN"
 
     execute_curl "GET /actuator/health" \
-        -X GET "${BASE_URL}:${CORE_PORT}/actuator/health"
+        -X GET "${BASE_URL}:${METRICS_PORT}/actuator/health"
 
-    print_summary "CORE SERVICE"
+    print_summary "PROFESSIONAL METRICS SERVICE"
+}
+
+test_professional_dashboard_service() {
+    print_header "📋 PROFESSIONAL DASHBOARD SERVICE"
+    
+    if [ "$PARALLEL_STARTUP" = false ]; then
+        start_microservice "professional-dashboard-service" $DASHBOARD_PORT "$PROJECT_ROOT/services/professional-dashboard-service"
+        wait_for_microservices "professional-dashboard-service|$DASHBOARD_PORT"
+    fi
+
+    execute_curl "POST /availability - Publicar disponibilidad" \
+        -X POST "${BASE_URL}:${DASHBOARD_PORT}/availability" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $AUTH_TOKEN" \
+        -d '{"date":"2026-06-01","startTime":"09:00:00","endTime":"18:00:00","slotDurationMinutes":30}'
+
+    execute_curl "GET /actuator/health" \
+        -X GET "${BASE_URL}:${DASHBOARD_PORT}/actuator/health"
+
+    print_summary "PROFESSIONAL DASHBOARD SERVICE"
 }
 
 test_payment_service() {
@@ -530,40 +656,51 @@ show_menu() {
     echo "╔════════════════════════════════════════════════════════════════╗"
     echo "║       MyAgenda Microservices Endpoints Test Script             ║"
     echo "║                                                                ║"
-    echo "║  ¿Qué microservicios quieres testear?                         ║"
-    echo "║  (Ingresa números separados por espacios, ej: 2 3 4)          ║"
+    echo "║  ¿Qué microservicio quieres testear?                          ║"
+    echo "║  (Se levantarán automáticamente sus dependencias)             ║"
     echo "╚════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
-    echo "  1) Gateway Service"
-    echo "  2) Identity Service"
-    echo "  3) Core Service"
-    echo "  4) Payment Service"
-    echo "  5) Notification Service"
-    echo "  6) Todos"
+    echo "  1) Gateway Service (requiere: Identity)"
+    echo "  2) Identity Service (sin dependencias)"
+    echo "  3) Availability Service (requiere: Identity)"
+    echo "  4) Booking Service (requiere: Identity, Availability)"
+    echo "  5) Payment Service (requiere: Identity, Booking)"
+    echo "  6) Notification Service (requiere: Identity)"
+    echo "  7) External Wallets Service (requiere: Identity)"
+    echo "  8) Professional Metrics Service (requiere: Identity, Booking)"
+    echo "  9) Professional Dashboard Service (requiere: Professional Metrics)"
     echo ""
-    read -rp "Selecciona: " choice
+    read -rp "Selecciona (1-9): " choice
     
-    if [ "$choice" = "6" ]; then
-        SERVICES_TO_TEST=(gateway identity core payment notification)
-        RUNNING_ALL=true
-    else
-        for num in $choice; do
-            case $num in
-                1) SERVICES_TO_TEST+=(gateway) ;;
-                2) SERVICES_TO_TEST+=(identity) ;;
-                3) SERVICES_TO_TEST+=(core) ;;
-                4) SERVICES_TO_TEST+=(payment) ;;
-                5) SERVICES_TO_TEST+=(notification) ;;
-                *) echo "Opción inválida: $num"; exit 1 ;;
-            esac
-        done
-    fi
+    case $choice in
+        1) SERVICES_TO_TEST=(gateway) ;;
+        2) SERVICES_TO_TEST=(identity) ;;
+        3) SERVICES_TO_TEST=(availability) ;;
+        4) SERVICES_TO_TEST=(booking) ;;
+        5) SERVICES_TO_TEST=(payment) ;;
+        6) SERVICES_TO_TEST=(notification) ;;
+        7) SERVICES_TO_TEST+=(external-wallets) ;;
+        8) SERVICES_TO_TEST=(professional-metrics) ;;
+        9) SERVICES_TO_TEST=(professional-dashboard) ;;
+        *) echo -e "${RED}Opción inválida: $choice${NC}"; exit 1 ;;
+    esac
+    
+    local resolved_services
+    resolved_services=$(resolve_dependencies "${SERVICES_TO_TEST[0]}")
+    SERVICES_TO_TEST=($resolved_services)
 }
 
 main() {
     > "$RESULTS_FILE"
     check_prerequisites || { echo -e "${RED}❌ Requisitos no cumplidos${NC}"; exit 1; }
     show_menu
+    
+    echo -e "\n${CYAN}📦 Servicios a levantar:${NC}"
+    for service in "${SERVICES_TO_TEST[@]}"; do
+        echo -e "  ${GREEN}✓${NC} $service"
+    done
+    echo ""
+    
     print_header "Iniciando pruebas"
     
     if [ ${#SERVICES_TO_TEST[@]} -gt 1 ]; then
@@ -573,11 +710,15 @@ main() {
     
     for service in "${SERVICES_TO_TEST[@]}"; do
         case $service in
-            gateway)      test_gateway_service ;;
-            identity)     test_identity_service ;;
-            core)         test_core_service ;;
-            payment)      test_payment_service ;;
-            notification) test_notification_service ;;
+            gateway)                  test_gateway_service ;;
+            identity)                 test_identity_service ;;
+            availability)             test_availability_service ;;
+            booking)                  test_booking_service ;;
+            payment)                  test_payment_service ;;
+            notification)             test_notification_service ;;
+            external-wallets)         test_external_wallets_service ;;
+            professional-metrics)     test_professional_metrics_service ;;
+            professional-dashboard)   test_professional_dashboard_service ;;
         esac
     done
     

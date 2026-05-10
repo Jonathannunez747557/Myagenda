@@ -1,0 +1,9 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://booking-db:5432/booking_db
+    username: myagenda
+    password: myagenda
+
+  jpa:
+    hibernate:
+      ddl-auto: update
