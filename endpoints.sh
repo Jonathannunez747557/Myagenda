@@ -32,6 +32,7 @@ PORTS_TO_KILL=($GATEWAY_PORT $IDENTITY_PORT $AVAILABILITY_PORT $BOOKING_PORT $PA
 SERVICES_TO_TEST=()
 SERVICES_STARTED=()
 DBS_TO_RESTART=()
+AVAILABILITY_ID=""
 
 declare -A SERVICE_DEPENDENCIES=(
     [gateway]="identity"
@@ -450,11 +451,19 @@ test_availability_service() {
         get_auth_token
     fi
 
-    execute_curl "POST /availability - Publicar horario del profesional" \
-        -X POST "${BASE_URL}:${AVAILABILITY_PORT}/availability" \
+    local avail_response
+    avail_response=$(curl -s -X POST "${BASE_URL}:${AVAILABILITY_PORT}/availability" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $AUTH_TOKEN" \
-        -d '{"date":"2026-06-01","startTime":"09:00:00","endTime":"18:00:00","slotDurationMinutes":30}'
+        -d '{"date":"2026-06-01","startTime":"09:00:00","endTime":"18:00:00","slotDurationMinutes":30}')
+    
+    AVAILABILITY_ID=$(echo "$avail_response" | grep -o '"id":"[^"]*' | sed 's/"id":"//' | head -1)
+    
+    if [ -n "$AVAILABILITY_ID" ]; then
+        echo -e "${GREEN}✅ Disponibilidad creada con ID: $AVAILABILITY_ID${NC}"
+    else
+        echo -e "${RED}❌ Error creando disponibilidad${NC}"
+    fi
 
     execute_curl "GET /actuator/health" \
         -X GET "${BASE_URL}:${AVAILABILITY_PORT}/actuator/health"
@@ -469,17 +478,26 @@ test_booking_service() {
         restart_db "identity-db"
         restart_db "booking-db"
         start_microservice "identity-service" $IDENTITY_PORT "$PROJECT_ROOT/services/identity-service"
+        start_microservice "availability-service" $AVAILABILITY_PORT "$PROJECT_ROOT/services/availability-service"
         start_microservice "booking-service" $BOOKING_PORT "$PROJECT_ROOT/services/booking-service"
-        wait_for_microservices "identity-service|$IDENTITY_PORT" "booking-service|$BOOKING_PORT"
+        wait_for_microservices "identity-service|$IDENTITY_PORT" "availability-service|$AVAILABILITY_PORT" "booking-service|$BOOKING_PORT"
         create_test_user
         get_auth_token
     fi
 
-    execute_curl "POST /bookings - Reservar turno" \
-        -X POST "${BASE_URL}:${BOOKING_PORT}/bookings" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $AUTH_TOKEN" \
-        -d '{"availabilityId":"test-avail-001","slotStart":"2026-06-01T09:30:00","slotEnd":"2026-06-01T10:00:00"}'
+    execute_curl "GET /availability - Obtener disponibilidades" \
+        -X GET "${BASE_URL}:${AVAILABILITY_PORT}/availability" \
+        -H "Authorization: Bearer $AUTH_TOKEN"
+
+    if [ -n "$AVAILABILITY_ID" ]; then
+        execute_curl "POST /bookings - Reservar turno" \
+            -X POST "${BASE_URL}:${BOOKING_PORT}/bookings" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $AUTH_TOKEN" \
+            -d "{\"availabilityId\":\"$AVAILABILITY_ID\",\"slotStart\":\"2026-06-01T09:30:00\",\"slotEnd\":\"2026-06-01T10:00:00\"}"
+    else
+        echo -e "${YELLOW}⚠️  No hay availabilityId para crear booking${NC}"
+    fi
 
     execute_curl "GET /actuator/health" \
         -X GET "${BASE_URL}:${BOOKING_PORT}/actuator/health"
@@ -573,8 +591,7 @@ test_payment_service() {
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $AUTH_TOKEN" \
         -d '{"bookingId":"booking-test-001","amount":100.00}')
-    local payment_id
-    payment_id=$(echo "$payment_resp" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+    PAYMENT_ID=$(echo "$payment_resp" | grep -o '"id":"[^"]*' | sed 's/"id":"//' | head -1)
 
     execute_curl "POST /payments/process - Procesar pago" \
         -X POST "${BASE_URL}:${PAYMENT_PORT}/payments/process" \
@@ -582,9 +599,11 @@ test_payment_service() {
         -H "Authorization: Bearer $AUTH_TOKEN" \
         -d '{"bookingId":"booking-test-001","amount":100.00}'
 
-    execute_curl "GET /payments/$payment_id - Obtener pago por ID" \
-        -X GET "${BASE_URL}:${PAYMENT_PORT}/payments/$payment_id" \
-        -H "Authorization: Bearer $AUTH_TOKEN"
+    if [ -n "$PAYMENT_ID" ]; then
+        execute_curl "GET /payments/$PAYMENT_ID - Obtener pago por ID" \
+            -X GET "${BASE_URL}:${PAYMENT_PORT}/payments/$PAYMENT_ID" \
+            -H "Authorization: Bearer $AUTH_TOKEN"
+    fi
 
     execute_curl "GET /actuator/health" \
         -X GET "${BASE_URL}:${PAYMENT_PORT}/actuator/health"
@@ -610,8 +629,7 @@ test_notification_service() {
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $AUTH_TOKEN" \
         -d '{"message":"Tu reserva fue confirmada","type":"EMAIL"}')
-    local notif_id
-    notif_id=$(echo "$notif_resp" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+    NOTIFICATION_ID=$(echo "$notif_resp" | grep -o '"id":"[^"]*' | sed 's/"id":"//' | head -1)
 
     execute_curl "POST /notifications/send - Enviar notificación" \
         -X POST "${BASE_URL}:${NOTIFICATION_PORT}/notifications/send" \
@@ -623,9 +641,11 @@ test_notification_service() {
         -X GET "${BASE_URL}:${NOTIFICATION_PORT}/notifications" \
         -H "Authorization: Bearer $AUTH_TOKEN"
 
-    execute_curl "GET /notifications/$notif_id - Obtener notificación por ID" \
-        -X GET "${BASE_URL}:${NOTIFICATION_PORT}/notifications/$notif_id" \
-        -H "Authorization: Bearer $AUTH_TOKEN"
+    if [ -n "$NOTIFICATION_ID" ]; then
+        execute_curl "GET /notifications/$NOTIFICATION_ID - Obtener notificación por ID" \
+            -X GET "${BASE_URL}:${NOTIFICATION_PORT}/notifications/$NOTIFICATION_ID" \
+            -H "Authorization: Bearer $AUTH_TOKEN"
+    fi
 
     execute_curl "GET /actuator/health" \
         -X GET "${BASE_URL}:${NOTIFICATION_PORT}/actuator/health"

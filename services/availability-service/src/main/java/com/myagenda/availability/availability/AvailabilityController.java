@@ -50,6 +50,25 @@ public class AvailabilityController {
         );
     }
 
+    @GetMapping
+    public List<AvailabilityResponse> getAvailabilities(Authentication auth) {
+        String professionalId = auth.getName();
+        List<Availability> availabilities = availabilityRepository.findByProfessionalId(professionalId);
+        
+        return availabilities.stream()
+                .map(availability -> new AvailabilityResponse(
+                        availability.getId(),
+                        availability.getProfessionalId(),
+                        availability.getDate(),
+                        availability.getStartTime(),
+                        availability.getEndTime(),
+                        availability.getSlotDurationMinutes(),
+                        availability.getCreatedAt(),
+                        computeSlots(availability.getStartTime(), availability.getEndTime(), availability.getSlotDurationMinutes())
+                ))
+                .toList();
+    }
+
     private List<SlotDto> computeSlots(LocalTime start, LocalTime end, int durationMinutes) {
         List<SlotDto> slots = new ArrayList<>();
         LocalTime current = start;
