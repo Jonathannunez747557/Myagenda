@@ -82,6 +82,7 @@ failed_tests = []
 running_processes = []
 lock = threading.Lock()
 MVN_CMD = None
+availability_id = None
 
 
 def find_mvn() -> Optional[str]:
@@ -497,6 +498,8 @@ def test_identity_service():
 
 def test_availability_service():
     """Test Availability Service"""
+    global availability_id
+    
     print_header("📅 AVAILABILITY SERVICE")
     
     restart_db("availability-db")
@@ -505,13 +508,22 @@ def test_availability_service():
     
     headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
     
-    execute_curl(
-        "POST /availability - Publicar horario del profesional",
-        "POST",
-        f"{BASE_URL}:{PORTS['availability']}/availability",
-        headers={**headers, "Content-Type": "application/json"},
-        json_data={"date": "2026-06-01", "startTime": "09:00:00", "endTime": "18:00:00", "slotDurationMinutes": 30}
-    )
+    try:
+        response = requests.post(
+            f"{BASE_URL}:{PORTS['availability']}/availability",
+            json={"date": "2026-06-01", "startTime": "09:00:00", "endTime": "18:00:00", "slotDurationMinutes": 30},
+            headers={**headers, "Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            availability_id = data.get("id")
+            print_success(f"Disponibilidad creada con ID: {availability_id}")
+        else:
+            print_error(f"Error creando disponibilidad: HTTP {response.status_code}")
+    except Exception as e:
+        print_error(f"Error: {e}")
     
     execute_curl(
         "GET /actuator/health",
@@ -527,18 +539,29 @@ def test_booking_service():
     print_header("📋 BOOKING SERVICE")
     
     restart_db("booking-db")
+    start_microservice("availability-service", PORTS["availability"], PROJECT_ROOT / SERVICE_DIRS["availability"])
     start_microservice("booking-service", PORTS["booking"], PROJECT_ROOT / SERVICE_DIRS["booking"])
     wait_for_service(PORTS["booking"], "booking-service")
     
     headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
     
     execute_curl(
-        "POST /bookings - Reservar turno",
-        "POST",
-        f"{BASE_URL}:{PORTS['booking']}/bookings",
-        headers={**headers, "Content-Type": "application/json"},
-        json_data={"availabilityId": "test-avail-001", "slotStart": "2026-06-01T09:30:00", "slotEnd": "2026-06-01T10:00:00"}
+        "GET /availability - Obtener disponibilidades",
+        "GET",
+        f"{BASE_URL}:{PORTS['availability']}/availability",
+        headers=headers
     )
+    
+    if availability_id:
+        execute_curl(
+            "POST /bookings - Reservar turno",
+            "POST",
+            f"{BASE_URL}:{PORTS['booking']}/bookings",
+            headers={**headers, "Content-Type": "application/json"},
+            json_data={"availabilityId": availability_id, "slotStart": "2026-06-01T09:30:00", "slotEnd": "2026-06-01T10:00:00"}
+        )
+    else:
+        print_warning("No hay availabilityId disponible para crear booking")
     
     execute_curl(
         "GET /actuator/health",
