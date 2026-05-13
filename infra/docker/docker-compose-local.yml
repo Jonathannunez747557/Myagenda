@@ -1,19 +1,128 @@
 services:
 
-  identity-db:
+
+  users-db:
     image: postgres:16-bookworm
-    container_name: identity-db
+    container_name: users-db
 
     environment:
-      POSTGRES_DB: identity_db
+      POSTGRES_DB: users_db
       POSTGRES_USER: myagenda
       POSTGRES_PASSWORD: myagenda
 
     ports:
-      - "5432:5432"
+      - "5438:5432"
 
     volumes:
-      - identity_pg_data:/var/lib/postgresql/data
+      - users_pg_data:/var/lib/postgresql/data
+
+  login-db:
+    image: postgres:16-bookworm
+    container_name: login-db
+
+    environment:
+      POSTGRES_DB: login_db
+      POSTGRES_USER: myagenda
+      POSTGRES_PASSWORD: myagenda
+
+    ports:
+      - "5440:5432"
+
+    volumes:
+      - login_pg_data:/var/lib/postgresql/data
+
+
+  authorization-db:
+    image: postgres:16-bookworm
+    container_name: authorization-db
+
+    environment:
+      POSTGRES_DB: authorization_db
+      POSTGRES_USER: myagenda
+      POSTGRES_PASSWORD: myagenda
+
+    ports:
+      - "5441:5432"
+
+    volumes:
+      - authorization_pg_data:/var/lib/postgresql/data
+
+
+  identity-validation-db:
+    image: postgres:16-bookworm
+    container_name: identity-validation-db
+
+    environment:
+      POSTGRES_DB: identity_validation_db
+      POSTGRES_USER: myagenda
+      POSTGRES_PASSWORD: myagenda
+
+    ports:
+      - "5442:5432"
+
+    volumes:
+      - identity_validation_pg_data:/var/lib/postgresql/data
+
+  onboarding-db:
+    image: postgres:16-bookworm
+    container_name: onboarding-db
+
+    environment:
+      POSTGRES_DB: onboarding_db
+      POSTGRES_USER: myagenda
+      POSTGRES_PASSWORD: myagenda
+
+    ports:
+      - "5443:5432"
+
+    volumes:
+      - onboarding_pg_data:/var/lib/postgresql/data
+
+  fraud-guardian-db:
+    image: postgres:16-bookworm
+    container_name: fraud-guardian-db
+
+    environment:
+      POSTGRES_DB: fraud_guardian_db
+      POSTGRES_USER: myagenda
+      POSTGRES_PASSWORD: myagenda
+
+    ports:
+      - "5444:5432"
+
+    volumes:
+      - fraud_guardian_pg_data:/var/lib/postgresql/data
+
+
+  audit-logging-db:
+    image: postgres:16-bookworm
+    container_name: audit-logging-db
+
+    environment:
+      POSTGRES_DB: audit_logging_db
+      POSTGRES_USER: myagenda
+      POSTGRES_PASSWORD: myagenda
+
+    ports:
+      - "5445:5432"
+
+    volumes:
+      - audit_logging_pg_data:/var/lib/postgresql/data
+
+#  identity-db:
+#    image: postgres:16-bookworm
+#    container_name: identity-db
+#
+#    environment:
+#      POSTGRES_DB: identity_db
+#      POSTGRES_USER: myagenda
+#      POSTGRES_PASSWORD: myagenda
+#
+#    ports:
+#      - "5432:5432"
+#
+#    volumes:
+#      - identity_pg_data:/var/lib/postgresql/data
 
   availability-db:
     image: postgres:16-bookworm
@@ -115,7 +224,14 @@ services:
       - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
 
 volumes:
-  identity_pg_data:
+  users_pg_data:
+  login_pg_data:
+  authorization_pg_data:
+  identity_validation_pg_data:
+  onboarding_pg_data:
+  fraud_guardian_pg_data:
+  audit_logging_pg_data:
+#  identity_pg_data:
   availability_pg_data:
   booking_pg_data:
   payment_pg_data:

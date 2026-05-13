@@ -1,0 +1,18 @@
+spring:
+  profiles:
+    active: local
+  application:
+    name: users-service
+
+server:
+  port: 8083
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+
+  endpoint:
+    health:
+      show-details: always

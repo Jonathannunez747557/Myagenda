@@ -33,14 +33,12 @@ public class SecurityConfig {
                 .authorizeExchange(exchange -> exchange
                         .pathMatchers(
                                 "/actuator/**",
-                                "/identity/actuator/**",
-                                "/identity/auth/**",
-                                "/core/availability",
-                                "/core/actuator/**",
-                                "/payments/actuator/**",
-                                "/notifications/actuator/**"
+                                "/login/api/v1/login/health",
+                                "/authorization/api/v1/authorization/health",
+                                "/users/api/v1/users/health",
+                                "/identity-validation/api/v1/identity-validation/health",
+                                "/onboarding/api/v1/onboarding/health"
                         ).permitAll()
-                        .pathMatchers("/identity/admin/**").hasRole("ADMIN")
                         .anyExchange().authenticated()
                 )
                 .oauth2ResourceServer(oauth2 -> oauth2

@@ -1,0 +1,18 @@
+spring:
+  profiles:
+    active: local
+  application:
+    name: audit-logging-service
+
+server:
+  port: 8087
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+
+  endpoint:
+    health:
+      show-details: always
